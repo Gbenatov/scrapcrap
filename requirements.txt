@@ -5,3 +5,8 @@ requests==2.31.0
 beautifulsoup4==4.12.2
 openpyxl==3.10.10
 lxml==4.9.3
+scrapy==2.11.0
+itemadapter==0.8.0
+twisted==23.10.0
+w3lib==2.1.1
+parsel==1.8.0
