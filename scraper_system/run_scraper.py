@@ -11,13 +11,14 @@ import logging
 from pathlib import Path
 
 # Add project to path
-sys.path.insert(0, os.path.dirname(__file__))
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, project_root)
+sys.path.insert(0, os.path.dirname(project_root))
 
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.log import configure_logging
 from court_document_scraper import CourtDocumentSpider, DocumentLinkFollowerSpider
 from pipelines import DocumentMetadataExporter
-import settings as scrapy_settings
 
 
 def run_spider(spider_class, spider_name, *args, **kwargs):

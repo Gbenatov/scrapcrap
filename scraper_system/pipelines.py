@@ -8,131 +8,99 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from scrapy.pipelines.files import FilesPipeline
-from scrapy.http import Request
 from itemadapter import ItemAdapter
 from scrapy.exceptions import DropItem
+import requests
 
 
-class CourtDocumentPipeline(FilesPipeline):
+class CourtDocumentPipeline:
     """
-    Custom pipeline extending FilesPipeline
-    Stores document metadata alongside downloaded files
+    Custom pipeline for storing document metadata
+    Downloads files and tracks them
     """
     
-    def __init__(self, store_uri, download_timeout=None, download_slot=None,
-                 auto_mkdir=True, crawl_modules=None):
-        super().__init__(store_uri, download_timeout, download_slot, auto_mkdir)
+    def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.store_dir = None
+        self.metadata_file = None
+    
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls()
 
     def open_spider(self, spider):
-        """Initialize metadata storage when spider opens"""
-        super().open_spider(spider)
-        self.metadata_file = os.path.join(
-            self.store_uri if isinstance(self.store_uri, str) else str(self.store_uri),
-            'metadata.jsonl'
-        )
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(self.metadata_file), exist_ok=True)
-        self.logger.info(f'Metadata will be stored in: {self.metadata_file}')
-
-    def file_path(self, request, response=None, info=None, *, item=None):
-        """
-        Customize file paths to organize by case number
-        Structure: case_number/filename
-        """
-        if item:
-            adapter = ItemAdapter(item)
-            case_number = adapter.get('case_number', 'unknown')
-            # Sanitize case number for use in filename
-            case_number = ''.join(c if c.isalnum() else '_' for c in case_number)
-        else:
-            case_number = 'unknown'
+        """Initialize when spider opens"""
+        self.store_dir = 'downloads/court_documents'
+        os.makedirs(self.store_dir, exist_ok=True)
         
-        # Get original filename from URL
-        filename = request.url.split('/')[-1]
-        if not filename or filename.endswith('.'):
-            filename = f'document_{int(datetime.now().timestamp())}'
-        
-        # Build organized path
-        return f'{case_number}/{filename}'
+        self.metadata_file = os.path.join(self.store_dir, 'metadata.jsonl')
+        self.logger.info(f'Storage directory: {self.store_dir}')
+        self.logger.info(f'Metadata file: {self.metadata_file}')
 
-    def get_media_requests(self, item, info):
-        """Get file URLs from the item for download"""
-        adapter = ItemAdapter(item)
-        urls = adapter.get('file_urls', [])
-        
-        for url in urls:
-            if isinstance(url, str) and url.strip():
-                try:
-                    yield Request(
-                        url,
-                        meta={'dont_redirect': False, 'dont_obey_robotstxt': False},
-                        errback=self.file_download_error
-                    )
-                except Exception as e:
-                    self.logger.error(f'Error creating request for {url}: {e}')
-
-    def item_completed(self, results, item, info):
-        """
-        Called when all files for an item have been downloaded
-        Stores metadata about the case and downloaded files
-        """
+    def process_item(self, item, spider):
+        """Process each item"""
         adapter = ItemAdapter(item)
         
-        # Process download results
-        file_paths = []
+        # Extract case information
+        case_number = adapter.get('case_number', 'unknown')
+        case_dir = os.path.join(self.store_dir, f'case_{case_number}')
+        os.makedirs(case_dir, exist_ok=True)
+        
+        # Download files
+        file_urls = adapter.get('file_urls', [])
+        downloaded_files = []
         failed_downloads = []
         
-        for success, file_info in results:
-            if success:
-                file_paths.append(file_info['path'])
-                self.logger.info(f"Downloaded: {file_info['path']}")
-            else:
-                # file_info is a Failure object when success=False
-                failed_downloads.append(str(file_info))
-                self.logger.error(f"Failed to download: {file_info}")
-        
-        # Store file paths in item
-        adapter['file_paths'] = file_paths
+        for file_url in file_urls:
+            try:
+                if isinstance(file_url, str) and file_url.strip():
+                    filename = file_url.split('/')[-1]
+                    if not filename or len(filename) < 3:
+                        filename = f'document_{len(downloaded_files)}.pdf'
+                    
+                    file_path = os.path.join(case_dir, filename)
+                    
+                    # Download file
+                    response = requests.get(file_url, timeout=30)
+                    if response.status_code == 200:
+                        with open(file_path, 'wb') as f:
+                            f.write(response.content)
+                        downloaded_files.append(f'case_{case_number}/{filename}')
+                        self.logger.info(f'Downloaded: {file_path}')
+                    else:
+                        self.logger.error(f'Failed to download {file_url}: HTTP {response.status_code}')
+                        failed_downloads.append(file_url)
+            except Exception as e:
+                self.logger.error(f'Error downloading {file_url}: {e}')
+                failed_downloads.append(file_url)
         
         # Save metadata
-        if file_paths or adapter.get('file_urls'):
+        if file_urls or downloaded_files:
             metadata = {
                 'timestamp': datetime.now().isoformat(),
-                'case_number': adapter.get('case_number'),
-                'case_title': adapter.get('case_title'),
-                'case_url': adapter.get('case_url'),
-                'case_status': adapter.get('case_status'),
-                'court_name': adapter.get('court_name'),
-                'judge_name': adapter.get('judge_name'),
-                'parties': adapter.get('parties'),
-                'requested_files': len(adapter.get('file_urls', [])),
-                'downloaded_files': len(file_paths),
+                'case_number': case_number,
+                'case_title': adapter.get('case_title', 'Unknown'),
+                'case_url': adapter.get('case_url', ''),
+                'case_status': adapter.get('case_status', ''),
+                'requested_files': len(file_urls),
+                'downloaded_files': len(downloaded_files),
                 'failed_downloads': len(failed_downloads),
-                'file_paths': file_paths,
+                'file_paths': downloaded_files,
                 'failed_urls': failed_downloads,
             }
             
-            # Append to metadata file (JSONL format for easy streaming)
             try:
                 with open(self.metadata_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(metadata, ensure_ascii=False) + '\n')
-                self.logger.info(f"Metadata saved for case: {adapter.get('case_number')}")
+                self.logger.info(f"Metadata saved for case: {case_number}")
             except Exception as e:
                 self.logger.error(f"Failed to save metadata: {e}")
         
-        # Drop item if no files were found or downloaded
-        if not adapter.get('file_urls'):
-            raise DropItem(f"No files found for case {adapter.get('case_number')}")
+        # Drop if no files
+        if not file_urls and not downloaded_files:
+            raise DropItem(f"No files found for case {case_number}")
         
         return item
-
-    def file_download_error(self, failure):
-        """Handle file download errors"""
-        self.logger.error(f'File download failed: {failure.request.url}')
-        self.logger.error(f'Error details: {failure.value}')
-        return failure
 
 
 class DocumentMetadataExporter:
