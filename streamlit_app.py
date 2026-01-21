@@ -14,6 +14,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 from bs4 import BeautifulSoup
+import warnings
+
+# Suppress SSL warnings
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
 # ⚙️ Streamlit Configuration
 st.set_page_config(
@@ -75,12 +79,25 @@ class CaseScraper:
     def fetch_cases(self):
         """Fetch case data from Israeli court website"""
         try:
-            response = requests.get(self.base_url, headers=self.headers, timeout=10)
+            response = requests.get(
+                self.base_url, 
+                headers=self.headers, 
+                timeout=30,
+                verify=False  # Ignore SSL certificate warnings
+            )
             response.raise_for_status()
             cases = self.extract_json_from_page(response.text)
-            return cases if cases else self._get_sample_data()
+            if cases:
+                return cases
+            return self._get_sample_data()
+        except requests.exceptions.Timeout:
+            st.warning("⏱️ Connection to court website timed out. Using sample data.")
+            return self._get_sample_data()
+        except requests.exceptions.ConnectionError:
+            st.warning("🌐 Could not connect to court website. Using sample data.")
+            return self._get_sample_data()
         except Exception as e:
-            st.warning(f"Could not fetch live data: {str(e)}")
+            st.warning(f"⚠️ Could not fetch live data: {type(e).__name__}. Using sample data.")
             return self._get_sample_data()
     
     def _get_sample_data(self):
