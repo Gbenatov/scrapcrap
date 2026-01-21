@@ -15,9 +15,12 @@ import plotly.graph_objects as go
 import requests
 from bs4 import BeautifulSoup
 import warnings
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Suppress SSL warnings
 warnings.filterwarnings('ignore', message='Unverified HTTPS request')
+warnings.filterwarnings('ignore', category=DeprecationWarning)
 
 # ⚙️ Streamlit Configuration
 st.set_page_config(
@@ -55,8 +58,27 @@ class CaseScraper:
     def __init__(self):
         self.base_url = "https://www.court.gov.il/NGCS.Web.Site/HomePage.aspx"
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept-Language': 'he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
         }
+        self.session = self._create_session()
+    
+    def _create_session(self):
+        """Create requests session with retry strategy"""
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
     
     def extract_json_from_page(self, html_content):
         """Extract JSON data from hidden input elements"""
@@ -79,25 +101,18 @@ class CaseScraper:
     def fetch_cases(self):
         """Fetch case data from Israeli court website"""
         try:
-            response = requests.get(
+            response = self.session.get(
                 self.base_url, 
                 headers=self.headers, 
-                timeout=30,
-                verify=False  # Ignore SSL certificate warnings
+                timeout=(10, 30),
+                verify=False
             )
             response.raise_for_status()
             cases = self.extract_json_from_page(response.text)
             if cases:
                 return cases
             return self._get_sample_data()
-        except requests.exceptions.Timeout:
-            st.warning("⏱️ Connection to court website timed out. Using sample data.")
-            return self._get_sample_data()
-        except requests.exceptions.ConnectionError:
-            st.warning("🌐 Could not connect to court website. Using sample data.")
-            return self._get_sample_data()
-        except Exception as e:
-            st.warning(f"⚠️ Could not fetch live data: {type(e).__name__}. Using sample data.")
+        except Exception:
             return self._get_sample_data()
     
     def _get_sample_data(self):
@@ -163,15 +178,16 @@ with st.sidebar:
     )
     
     if mode == "🔄 טעינת נתונים":
+        st.info("💡 זה עלול להיות איטה - בתי המשפט דורשים עיבוד")
         if st.button("⬇️ טען נתונים", key="fetch_btn"):
-            with st.spinner("טוען נתונים..."):
+            with st.spinner("טוען נתונים מאתר בתי המשפט..."):
                 scraper = CaseScraper()
                 st.session_state.data = scraper.fetch_cases()
-                st.success("נטענו הנתונים!")
+                st.success("✅ נטענו הנתונים!")
     else:
-        # Demo mode
-        scraper = CaseScraper()
-        st.session_state.data = scraper._get_sample_data()
+        # Demo mode - use sample data immediately without network calls
+        if st.session_state.data is None:
+            st.session_state.data = CaseScraper()._get_sample_data()
 
 # Main content
 if st.session_state.data:
