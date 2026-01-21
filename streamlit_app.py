@@ -1,6 +1,6 @@
 """
-Streamlit App - מערכת Scraping פנקס תובענות ייצוגיות
-משתמשת ב-CaseScraper מ-scraper_system
+Streamlit App - Data Scraper and Exporter
+ממשק אינטראקטיבי להזנת URLs וייצוא נתונים
 """
 
 import streamlit as st
@@ -8,160 +8,214 @@ import pandas as pd
 import json
 from datetime import datetime
 import plotly.express as px
-import sys
-import os
-
-# Add scraper_system to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'scraper_system'))
-
-try:
-    from main_scraper import CaseScraper
-    from data_analyzer import DataAnalyzer
-    SCRAPER_AVAILABLE = True
-except ImportError:
-    SCRAPER_AVAILABLE = False
+from bs4 import BeautifulSoup
+import requests
 
 # Page config
 st.set_page_config(
-    page_title="פנקס תובענות ייצוגיות",
-    page_icon="⚖️",
+    page_title="Data Scraper & Exporter",
+    page_icon="📊",
     layout="wide"
 )
 
 # Title
-st.title("⚖️ מערכת Scraping - פנקס תובענות ייצוגיות")
-st.markdown("סקרוף וניתוח של נתוני תיקים בבתי המשפט")
-
-# Sample data (fallback)
-SAMPLE_DATA = [
-    {
-        "CaseNumber": "CA 2024-001",
-        "CaseName": "תובענה ייצוגית ראשונה",
-        "Court": "בית משפט מחוזי - תל אביב",
-        "FilingDate": "2024-01-15",
-        "Status": "פעיל",
-        "ClaimAmount": 5000000,
-        "Plaintiffs": 150
-    },
-    {
-        "CaseNumber": "CA 2024-002",
-        "CaseName": "תובענה ייצוגית שנייה",
-        "Court": "בית משפט מחוזי - ירושלים",
-        "FilingDate": "2024-02-20",
-        "Status": "פעיל",
-        "ClaimAmount": 3500000,
-        "Plaintiffs": 200
-    },
-    {
-        "CaseNumber": "CA 2024-003",
-        "CaseName": "תובענה ייצוגית שלישית",
-        "Court": "בית משפט מחוזי - תא גן",
-        "FilingDate": "2024-03-10",
-        "Status": "בהליכים",
-        "ClaimAmount": 7500000,
-        "Plaintiffs": 300
-    }
-]
+st.title("📊 Data Scraper & Exporter")
+st.markdown("הזן URL ובחר שדות לייצוא")
 
 # Initialize session
 if 'data' not in st.session_state:
     st.session_state.data = None
+if 'columns_info' not in st.session_state:
+    st.session_state.columns_info = {}
 
-# Sidebar
+# Sidebar - Input Options
 with st.sidebar:
-    st.header("🔧 בקרה")
+    st.header("🔧 אפשרויות")
     
-    if SCRAPER_AVAILABLE:
-        st.success("✅ Scraper זמין")
+    input_method = st.radio(
+        "בחר אפשרות קלט:",
+        ["🌐 הזן URL", "📁 העלה קובץ", "📋 דוגמה"]
+    )
+    
+    # Method 1: URL Input
+    if input_method == "🌐 הזן URL":
+        st.subheader("הזן URL")
+        url = st.text_input(
+            "כתובת האתר:",
+            placeholder="https://example.com",
+            key="url_input"
+        )
         
-        if st.button("⬇️ טען נתונים חיים", key="fetch_btn"):
-            with st.spinner("טוען נתונים מאתר בתי המשפט..."):
+        if st.button("⬇️ טען דף", key="load_url"):
+            with st.spinner("טוען דף..."):
                 try:
-                    scraper = CaseScraper()
-                    cases = scraper.fetch_page_and_extract_cases()
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    }
+                    response = requests.get(url, headers=headers, timeout=10)
+                    response.raise_for_status()
                     
-                    if cases:
-                        st.session_state.data = cases
-                        st.success(f"✅ טען {len(cases)} תיקים בהצלחה!")
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # חילוץ טבלאות
+                    tables = pd.read_html(url)
+                    
+                    if tables:
+                        st.session_state.data = tables[0]
+                        st.success(f"✅ טען {len(tables)} טבלה/ות")
                     else:
-                        st.warning("לא נמצאו נתונים. משתמש בדוגמה.")
-                        st.session_state.data = SAMPLE_DATA
+                        st.warning("לא נמצאו טבלאות בדף")
+                        
                 except Exception as e:
-                    st.error(f"❌ שגיאה בטעינה: {str(e)}")
-                    st.session_state.data = SAMPLE_DATA
+                    st.error(f"❌ שגיאה: {str(e)}")
+    
+    # Method 2: File Upload
+    elif input_method == "📁 העלה קובץ":
+        st.subheader("העלה קובץ")
+        uploaded_file = st.file_uploader(
+            "בחר קובץ CSV או Excel:",
+            type=['csv', 'xlsx', 'xls'],
+            key="file_upload"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    st.session_state.data = pd.read_csv(uploaded_file)
+                else:
+                    st.session_state.data = pd.read_excel(uploaded_file)
+                st.success("✅ קובץ טען בהצלחה")
+            except Exception as e:
+                st.error(f"❌ שגיאה בטעינת קובץ: {str(e)}")
+    
+    # Method 3: Sample Data
     else:
-        st.warning("⚠️ Scraper לא זמין")
-    
-    st.divider()
-    
-    if st.button("📊 השתמש בדוגמה", key="demo_btn"):
-        st.session_state.data = SAMPLE_DATA
-
-# Initialize with demo data on first load
-if st.session_state.data is None:
-    st.session_state.data = SAMPLE_DATA
+        st.subheader("דוגמה")
+        sample_data = {
+            "CaseNumber": ["CA 2024-001", "CA 2024-002", "CA 2024-003"],
+            "CaseName": ["תובענה 1", "תובענה 2", "תובענה 3"],
+            "Court": ["תל אביב", "ירושלים", "תא גן"],
+            "Status": ["פעיל", "פעיל", "בהליכים"],
+            "Amount": [5000000, 3500000, 7500000]
+        }
+        st.session_state.data = pd.DataFrame(sample_data)
+        st.success("✅ נטען נתוני דוגמה")
 
 # Main content
-if st.session_state.data:
-    df = pd.DataFrame(st.session_state.data)
+if st.session_state.data is not None:
+    df = st.session_state.data
     
-    # Metrics
+    # Show data info
+    st.subheader("📋 מידע על הנתונים")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("📋 סה\"כ תיקים", len(df))
+        st.metric("שורות", len(df))
     with col2:
-        total = df['ClaimAmount'].sum() if 'ClaimAmount' in df.columns else 0
-        st.metric("💰 סה\"כ תביעה", f"₪{total:,.0f}")
+        st.metric("עמודות", len(df.columns))
     with col3:
-        avg = df['Plaintiffs'].mean() if 'Plaintiffs' in df.columns else 0
-        st.metric("👥 ממוצע תובעים", f"{avg:.0f}")
+        st.metric("גודל", f"{df.memory_usage(deep=True).sum() / 1024:.1f} KB")
     
     st.divider()
     
-    # Tabs
-    tab1, tab2, tab3 = st.tabs(["📊 גרפים", "🔍 טבלה", "💾 ייצוא"])
+    # Column selection and transformation
+    st.subheader("🔧 בחר עמודות לייצוא")
     
-    with tab1:
-        col1, col2 = st.columns(2)
-        with col1:
-            if 'Court' in df.columns:
-                court_data = df.groupby('Court').size()
-                fig = px.bar(
-                    x=court_data.index,
-                    y=court_data.values,
-                    title="תיקים לפי בית משפט",
-                    labels={"x": "בית משפט", "y": "מספר תיקים"}
-                )
-                st.plotly_chart(fig, use_container_width=True)
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Select columns to export
+        available_columns = df.columns.tolist()
+        selected_columns = st.multiselect(
+            "בחר עמודות:",
+            available_columns,
+            default=available_columns,
+            key="column_select"
+        )
+    
+    with col2:
+        # Filter rows
+        if len(df) > 0:
+            max_rows = len(df)
+            num_rows = st.number_input(
+                "מספר שורות:",
+                min_value=1,
+                max_value=max_rows,
+                value=min(100, max_rows),
+                key="row_filter"
+            )
+        else:
+            num_rows = 0
+    
+    st.divider()
+    
+    # Create filtered dataframe
+    if selected_columns:
+        filtered_df = df[selected_columns].head(num_rows)
         
-        with col2:
-            if 'Status' in df.columns:
-                status_data = df.groupby('Status').size()
-                fig = px.pie(
-                    labels=status_data.index,
-                    values=status_data.values,
-                    title="התפלגות סטטוסים"
+        # Show preview
+        st.subheader("👁️ תצוגה מקדימה")
+        st.dataframe(filtered_df, use_container_width=True)
+        
+        # Statistics
+        st.subheader("📊 סטטיסטיקה")
+        
+        # Numeric columns only
+        numeric_cols = filtered_df.select_dtypes(include=['number']).columns.tolist()
+        
+        if numeric_cols:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig = px.bar(
+                    filtered_df[[numeric_cols[0]]].describe().T,
+                    title=f"סטטיסטיקה: {numeric_cols[0]}"
                 )
                 st.plotly_chart(fig, use_container_width=True)
-    
-    with tab2:
-        st.dataframe(df, use_container_width=True)
-    
-    with tab3:
-        col1, col2 = st.columns(2)
+            
+            if len(numeric_cols) > 1:
+                with col2:
+                    fig = px.bar(
+                        filtered_df[[numeric_cols[1]]].describe().T,
+                        title=f"סטטיסטיקה: {numeric_cols[1]}"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+        
+        st.divider()
+        
+        # Export options
+        st.subheader("💾 ייצוא נתונים")
+        
+        col1, col2, col3 = st.columns(3)
+        
         with col1:
-            csv = df.to_csv(index=False, encoding='utf-8-sig')
+            csv_data = filtered_df.to_csv(index=False, encoding='utf-8-sig')
             st.download_button(
-                label="📥 הורד CSV",
-                data=csv,
-                file_name=f"cases_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                label="📥 CSV",
+                data=csv_data,
+                file_name=f"data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv"
             )
+        
         with col2:
-            json_str = json.dumps(st.session_state.data, ensure_ascii=False, indent=2)
+            json_data = json.dumps(filtered_df.to_dict(orient='records'), ensure_ascii=False, indent=2)
             st.download_button(
-                label="📥 הורד JSON",
-                data=json_str,
-                file_name=f"cases_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                label="📥 JSON",
+                data=json_data,
+                file_name=f"data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json"
             )
+        
+        with col3:
+            excel_data = filtered_df.to_excel(index=False)
+            st.download_button(
+                label="📥 Excel",
+                data=excel_data,
+                file_name=f"data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    
+    else:
+        st.warning("⚠️ בחר לפחות עמודה אחת")
+
+else:
+    st.info("👈 בחר אפשרות בתפריט הצד כדי להתחיל")
